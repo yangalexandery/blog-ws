@@ -179,7 +179,7 @@ if __name__ == '__main__':
 
             images = downs.forward(Variable(images.cuda()).float())
             Dx = ds[0].forward(images)
-            print(fake_images.size(), images.size())
+            # print(fake_images.size(), images.size())
 
             ### Wasserstein Distance *** look this up ***
             # https://medium.com/@jonathan_hui/gan-wasserstein-gan-wgan-gp-6a1a2aa1b490
@@ -191,8 +191,26 @@ if __name__ == '__main__':
             x_hat = Variable(x_hat.cuda(), requires_grad=True)
             print(x_hat.size())
             Dx_hat = ds[0].forward(x_hat)
-            print(Dx_hat.size())
-            grads = torch.autograd.grad(Dx_hat, x_hat, grad_outputs=torch.ones(Dx_hat.size()).cuda())
+            # print(Dx_hat)
+            grads = torch.autograd.grad(Dx_hat, x_hat, grad_outputs=torch.ones(Dx_hat.size()).cuda())[0]
+            gp = torch.pow(grads, 2)
+            for i in range(3):
+                gp = torch.sum(gp, dim=1)
+            gp = torch.sqrt(gp)
+            ### hyperparameters
+            w_gamma = 1.0
+            epsilon = 0.001
+
+            gp = torch.pow((gp - w_gamma) / w_gamma, 2)
+            gp_scaled = gp * w_gamma
+
+            epsilon_cost = epsilon * torch.pow(Dx, 2)
+
+
+            # print(grads[0].cpu().data.numpy())
+            # print(grads.size())
+            loss = torch.mean(wd + gp_scaled + epsilon_cost)# + gp_scaled + epsilon_cost)
+            print(loss)
 
             # images = Variable(images.cuda()).float()
             # labels = Variable(labels.cuda())
@@ -200,8 +218,8 @@ if __name__ == '__main__':
             # optimizer.zero_grad()
 
             # forward pass
-            outputs = model.forward(images)
-            loss = loss_fn(outputs, labels.squeeze())
+            # outputs = model.forward(images)
+            # loss = loss_fn(outputs, labels.squeeze())
             # add summary to logger
             # logger.scalar_summary('loss', loss.data[0], step)
             step += args.batch

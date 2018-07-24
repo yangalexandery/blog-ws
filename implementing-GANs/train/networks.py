@@ -16,13 +16,13 @@ class Generator(nn.Module):
 
         for i in range(self.num_layers):
             if i == 0:
-                self.layers.append([nn.ConvTranspose2d(self.latent_dim, self.channels[i], 4), nn.ReLU()])
+                self.layers.append([nn.ConvTranspose2d(self.latent_dim, self.channels[i], 4), nn.LeakyReLU()])
             else:
                 # self.features.append(self.upscale(self.channels[i-1])
                 # self.features.append(F.upsample())
-                self.layers.append([nn.Conv2d(self.channels[i-1], self.channels[i], 3, padding=1), nn.ReLU()])
+                self.layers.append([nn.Conv2d(self.channels[i-1], self.channels[i], 3, padding=1), nn.LeakyReLU()])
 
-        self.last_layer = [nn.Conv2d(self.channels[-1], self.channels[-1], 3, padding=1), nn.ReLU()]
+        self.last_layer = [nn.Conv2d(self.channels[-1], self.channels[-1], 3, padding=1), nn.LeakyReLU()]
 
         self.RGB_layer_1 = nn.Conv2d(self.channels[-1], 3, 1)
         self.RGB_layer_2 = nn.Conv2d(self.channels[-2], 3, 1) if self.num_layers > 1 else None
@@ -79,17 +79,17 @@ class Discriminator(nn.Module):
         self.layers = []
         self.params = nn.ParameterList()
 
-        self.RGB_layer_1 = [nn.Conv2d(3, self.channels[-1], 1), nn.ReLU()]
-        self.RGB_layer_2 = [nn.AvgPool2d(2, stride=2), nn.Conv2d(3, self.channels[-2], 1), nn.ReLU()] if self.num_layers > 1 else None
+        self.RGB_layer_1 = [nn.Conv2d(3, self.channels[-1], 1), nn.LeakyReLU()]
+        self.RGB_layer_2 = [nn.AvgPool2d(2, stride=2), nn.Conv2d(3, self.channels[-2], 1), nn.LeakyReLU()] if self.num_layers > 1 else None
 
         for i in reversed(range(self.num_layers)):
             if i > 0:
-                self.layers.append([nn.Conv2d(self.channels[i], self.channels[i-1], 3, padding=1), nn.ReLU(), nn.AvgPool2d(2, stride=2)])
+                self.layers.append([nn.Conv2d(self.channels[i], self.channels[i-1], 3, padding=1), nn.LeakyReLU(), nn.AvgPool2d(2, stride=2)])
                 # this may need checking
             else:
                 # need to do minibatch-stddev
-                self.layers.append([nn.Conv2d(self.channels[0], self.channels[0], 3, padding=1), nn.ReLU(),
-                                    nn.Conv2d(self.channels[0], 1, 4), nn.ReLU()])
+                self.layers.append([nn.Conv2d(self.channels[0], self.channels[0], 3, padding=1), nn.LeakyReLU(),
+                                    nn.Conv2d(self.channels[0], 1, 4), nn.LeakyReLU()])
         self.alpha = 0
 
         self.get_params()
