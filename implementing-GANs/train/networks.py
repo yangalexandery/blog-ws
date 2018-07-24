@@ -12,6 +12,8 @@ class Generator(nn.Module):
         self.channels = channels
         assert self.num_layers == len(self.channels)
         self.layers = []
+        self.params = nn.ParameterList()
+
         for i in range(self.num_layers):
             if i == 0:
                 self.layers.append([nn.ConvTranspose2d(self.latent_dim, self.channels[i], 4), nn.ReLU()])
@@ -19,10 +21,29 @@ class Generator(nn.Module):
                 # self.features.append(self.upscale(self.channels[i-1])
                 # self.features.append(F.upsample())
                 self.layers.append([nn.Conv2d(self.channels[i-1], self.channels[i], 3, padding=1), nn.ReLU()])
+
         self.last_layer = [nn.Conv2d(self.channels[-1], self.channels[-1], 3, padding=1), nn.ReLU()]
+
         self.RGB_layer_1 = nn.Conv2d(self.channels[-1], 3, 1)
-        self.RGB_layer_2 = nn.Conv2d(self.channels[-2], 3, 1)
+        self.RGB_layer_2 = nn.Conv2d(self.channels[-2], 3, 1) if self.num_layers > 1 else None
+
         self.alpha = 0
+        self.find_params()
+
+
+    def find_params(self):
+        for layer in self.layers:
+            for module in layer:
+                for param in module.parameters():
+                    self.params.append(param)
+        for module in self.last_layer:
+            for param in module.parameters():
+                self.params.append(param)
+        for param in self.RGB_layer_1.parameters():
+            self.params.append(param)
+        if self.RGB_layer_2:
+            for param in self.RGB_layer_2.parameters():
+                self.params.append(param)
 
 
     def forward(self, x):
@@ -56,8 +77,11 @@ class Discriminator(nn.Module):
         self.channels = channels
         assert self.num_layers == len(self.channels)
         self.layers = []
+        self.params = nn.ParameterList()
+
         self.RGB_layer_1 = [nn.Conv2d(3, self.channels[-1], 1), nn.ReLU()]
-        self.RGB_layer_2 = [nn.AvgPool2d(2, stride=2), nn.Conv2d(3, self.channels[-2], 1), nn.ReLU()]
+        self.RGB_layer_2 = [nn.AvgPool2d(2, stride=2), nn.Conv2d(3, self.channels[-2], 1), nn.ReLU()] if self.num_layers > 1 else None
+
         for i in reversed(range(self.num_layers)):
             if i > 0:
                 self.layers.append([nn.Conv2d(self.channels[i], self.channels[i-1], 3, padding=1), nn.ReLU(), nn.AvgPool2d(2, stride=2)])
@@ -65,8 +89,24 @@ class Discriminator(nn.Module):
             else:
                 # need to do minibatch-stddev
                 self.layers.append([nn.Conv2d(self.channels[0], self.channels[0], 3, padding=1), nn.ReLU(),
-                                    nn.Conv2d(self.channels[0], self.channels[0], 4), nn.ReLU()])
+                                    nn.Conv2d(self.channels[0], 1, 4), nn.ReLU()])
         self.alpha = 0
+
+        self.get_params()
+
+
+    def get_params(self):
+        for layer in self.layers:
+            for module in layer:
+                for param in module.parameters():
+                    self.params.append(param)
+        for module in self.RGB_layer_1:
+            for param in module.parameters():
+                self.params.append(param)
+        if self.RGB_layer_2:
+            for module in self.RGB_layer_2:
+                for param in module.parameters():
+                    self.params.append(param)
 
 
     def forward(self, x):
@@ -74,11 +114,12 @@ class Discriminator(nn.Module):
         for module in self.RGB_layer_1:
             x1 = module(x1)
         x0 = x
-        for module in self.RGB_layer_2:
-            x0 = module(x0)
         for i in reversed(range(self.num_layers)):
-            for module in layer:
+            for module in self.layers[i]:
                 x1 = module(x1)
+        if self.RGB_layer_2:
+            for module in self.RGB_layer_2:
+                x0 = module(x0)
             x1 = self.smooth(x0, x1)
         return x1
 
@@ -87,6 +128,15 @@ class Discriminator(nn.Module):
         return torch.add(torch.mul(x0, 1 - self.alpha), torch.mul(x1, self.alpha))
 
 
+class Downsampler(nn.Module):
+
+    def __init__(self, input_dim, output_dim):
+        super(Downsampler, self).__init__()
+        self.size = input_dim // output_dim
+        self.layer = nn.AvgPool2d(self.size, stride=self.size)
+
+    def forward(self, x):
+        return self.layer(x)
 
 # def FC(dim_list, input_dim = 32 * 32 * 3, output_dim = 10):
 #     """Constructs a fully connected network with given hidden dimensions"""

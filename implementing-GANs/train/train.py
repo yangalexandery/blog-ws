@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 from torch.nn import CrossEntropyLoss
 from torch.autograd import Variable
 from torch.nn.utils import clip_grad_norm
-from networks import Generator, Discriminator
+from networks import Generator, Discriminator, Downsampler
 from data import ImageLoader
 
 import time
@@ -68,7 +68,7 @@ def accuracy(output, target, topk=(1,)):
     return res
 
 def random_latent_vectors(batch_size, latent_dim):
-    return np.random.randn(batch_size, latent_dim)
+    return np.random.randn(batch_size, latent_dim, 1, 1)
 
 CHANNELS = [16, 16, 32, 64, 128, 256]
 
@@ -126,16 +126,16 @@ if __name__ == '__main__':
     print('[size] = {0}'.format(len(data['train'])))
 
     # set up model and convert into cuda
-    gs = [Generator(i+1, 32, CHANNELS[:i+1]) for i in range(6)]
-    ds = [Discriminator(i+1, CHANNELS[:i+1]) for i in range(6)]
+    gs = [Generator(i+1, 32, CHANNELS[:i+1]).cuda() for i in range(6)]
+    ds = [Discriminator(i+1, CHANNELS[:i+1]).cuda() for i in range(6)]
 
     # g = NAME_TO_MODEL['gen'].cuda()
     # d = NAME_TO_MODEL['disc'].cuda()
     print('==> model loaded')
 
     # set up optimizer for training
-    optimizer_g = torch.optim.Adam(gs[0].parameters(), lr=1e-4, weight_decay=1e-5)
-    optimizer_d = torch.optim.Adam(ds[0].parameters(), lr=1e-4, weight_decay=1e-5)
+    optimizer_g = torch.optim.Adam(gs[0].params, lr=1e-4, weight_decay=1e-5)
+    optimizer_d = torch.optim.Adam(ds[0].params, lr=1e-4, weight_decay=1e-5)
     print('==> optimizer loaded')
 
     # set up experiment path
@@ -167,12 +167,37 @@ if __name__ == '__main__':
         gs[0].eval()
         ds[0].train()
 
+        downs = Downsampler(128, 4).cuda()
+
         for images in tqdm(loaders['train'], desc = 'epoch %d' % (epoch + 1)):
             # convert images and labels into cuda tensor
-            images = Variable(images.cuda()).float()
+            latents = random_latent_vectors(args.batch, 32)
+            latents = Variable(torch.FloatTensor(latents).cuda())
+
+            fake_images = gs[0].forward(latents)
+            Dz = ds[0].forward(fake_images)
+
+            images = downs.forward(Variable(images.cuda()).float())
+            Dx = ds[0].forward(images)
+            print(fake_images.size(), images.size())
+
+            ### Wasserstein Distance *** look this up ***
+            # https://medium.com/@jonathan_hui/gan-wasserstein-gan-wgan-gp-6a1a2aa1b490
+            wd = Dz - Dx
+
+            mix = np.tile(np.random.rand(args.batch, 1, 1, 1), (1, images.size(1), images.size(2), images.size(3)))
+            mix = torch.FloatTensor(mix)
+            x_hat = torch.mul(fake_images.data.cpu(), mix) + torch.mul(images.data.cpu(), 1 - mix)
+            x_hat = Variable(x_hat.cuda(), requires_grad=True)
+            print(x_hat.size())
+            Dx_hat = ds[0].forward(x_hat)
+            print(Dx_hat.size())
+            grads = torch.autograd.grad(Dx_hat, x_hat, grad_outputs=torch.ones(Dx_hat.size()).cuda())
+
+            # images = Variable(images.cuda()).float()
             # labels = Variable(labels.cuda())
             # initialize optimizer
-            optimizer.zero_grad()
+            # optimizer.zero_grad()
 
             # forward pass
             outputs = model.forward(images)
