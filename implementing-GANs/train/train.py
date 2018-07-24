@@ -161,7 +161,8 @@ if __name__ == '__main__':
     best_top_5 = 0
 
     for epoch in range(epoch, args.epochs):
-        step = epoch * len(data['train'])
+        step_d = epoch * len(data['train'])
+        step_g = epoch * len(data['train'])
 
         # training the model
         gs[0].eval()
@@ -169,7 +170,7 @@ if __name__ == '__main__':
 
         downs = Downsampler(128, 4).cuda()
 
-        for images in tqdm(loaders['train'], desc = 'epoch %d' % (epoch + 1)):
+        for images in tqdm(loaders['train'], desc = 'epoch (D) %d' % (epoch + 1)):
             # convert images and labels into cuda tensor
             latents = random_latent_vectors(args.batch, 32)
             latents = Variable(torch.FloatTensor(latents).cuda())
@@ -189,10 +190,10 @@ if __name__ == '__main__':
             mix = torch.FloatTensor(mix)
             x_hat = torch.mul(fake_images.data.cpu(), mix) + torch.mul(images.data.cpu(), 1 - mix)
             x_hat = Variable(x_hat.cuda(), requires_grad=True)
-            print(x_hat.size())
             Dx_hat = ds[0].forward(x_hat)
             # print(Dx_hat)
-            grads = torch.autograd.grad(Dx_hat, x_hat, grad_outputs=torch.ones(Dx_hat.size()).cuda())[0]
+            grads = torch.autograd.grad(Dx_hat, x_hat, grad_outputs=torch.ones(Dx_hat.size()).cuda(),
+                                        create_graph=True, retain_graph=True)[0]
             gp = torch.pow(grads, 2)
             for i in range(3):
                 gp = torch.sum(gp, dim=1)
@@ -207,10 +208,10 @@ if __name__ == '__main__':
             epsilon_cost = epsilon * torch.pow(Dx, 2)
 
 
+            # loss = gp_scaled
             # print(grads[0].cpu().data.numpy())
             # print(grads.size())
-            loss = torch.mean(wd + gp_scaled + epsilon_cost)# + gp_scaled + epsilon_cost)
-            print(loss)
+            loss = torch.mean(wd + gp_scaled + epsilon_cost)
 
             # images = Variable(images.cuda()).float()
             # labels = Variable(labels.cuda())
@@ -221,9 +222,15 @@ if __name__ == '__main__':
             # outputs = model.forward(images)
             # loss = loss_fn(outputs, labels.squeeze())
             # add summary to logger
-            # logger.scalar_summary('loss', loss.data[0], step)
-            step += args.batch
+            logger.scalar_summary('loss (D)', loss.data[0], step_d)
+            wd_log = torch.mean(wd)
+            logger.scalar_summary('Wasserstein Distance', wd_log.data[0], step_d)
+            gp_log = torch.mean(gp_scaled)
+            logger.scalar_summary('Gradient Penalty (scaled)', gp_log.data[0], step_d)
+            epsilon_log = torch.mean(epsilon_cost)
+            logger.scalar_summary('Epsilon Cost', epsilon_log.data[0], step_d)
 
+            step_d += args.batch
             # backward pass
             loss.backward()
 
@@ -231,7 +238,28 @@ if __name__ == '__main__':
             # clip_grad_norm(model.parameters(), 10.0)
 
             optimizer_d.step()
+            optimizer_d.zero_grad()
 
+        gs[0].train()
+        ds[0].eval()
+
+        for images in tqdm(loaders['train'], desc = 'epoch (G) %d' % (epoch + 1)):
+            latents = random_latent_vectors(args.batch, 32)
+            latents = Variable(torch.FloatTensor(latents).cuda())
+
+            fake_images = gs[0].forward(latents)
+            Dz = ds[0].forward(fake_images)
+
+            loss = torch.mean(-Dz)
+
+            logger.scalar_summary('loss (G)', loss.data[0], step_g)
+
+            step_g += args.batch
+
+            loss.backward()
+
+            optimizer_g.step()
+            optimizer_g.zero_grad()
 ##### LOGGING STUFF #####
         # if args.snapshot != 0 and (epoch + 1) % args.snapshot == 0:
         #     # testing the model
