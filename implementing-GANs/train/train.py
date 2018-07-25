@@ -70,6 +70,11 @@ def accuracy(output, target, topk=(1,)):
 def random_latent_vectors(batch_size, latent_dim):
     return np.random.randn(batch_size, latent_dim, 1, 1)
 
+def logify(val):
+    if -1 <= val <= 1:
+        return val
+    return np.log(val) if val > 0 else -np.log(-val)
+
 CHANNELS = [16, 16, 32, 64, 128, 256]
 
 NAME_TO_MODEL = {
@@ -134,9 +139,6 @@ if __name__ == '__main__':
     print('==> model loaded')
 
     # set up optimizer for training
-    optimizer_g = torch.optim.Adam(gs[0].params, lr=1e-4, weight_decay=1e-5)
-    optimizer_d = torch.optim.Adam(ds[0].params, lr=1e-4, weight_decay=1e-5)
-    print('==> optimizer loaded')
 
     # set up experiment path
     exp_path = os.path.join('exp', args.exp)
@@ -160,159 +162,203 @@ if __name__ == '__main__':
 
     best_top_5 = 0
 
-    for epoch in range(epoch, args.epochs):
-        step_d = epoch * len(data['train'])
-        step_g = epoch * len(data['train'])
+    step_d = 0 #epoch * len(data['train'])
+    step_g = 0 #epoch * len(data['train'])
+    for layer in range(len(CHANNELS)):
 
-        # training the model
-        gs[0].eval()
-        ds[0].train()
+        optimizer_g = torch.optim.Adam(gs[layer].params, lr=1e-4, weight_decay=1e-5)
+        optimizer_d = torch.optim.Adam(ds[layer].params, lr=1e-4, weight_decay=1e-5)
+        print('==> optimizer loaded')
 
-        downs = Downsampler(128, 4).cuda()
+        if layer != 0:
+            ds[layer].load_prev_model(ds[layer - 1])
+            gs[layer].load_prev_model(gs[layer - 1])
 
-        for images in tqdm(loaders['train'], desc = 'epoch (D) %d' % (epoch + 1)):
-            # convert images and labels into cuda tensor
-            latents = random_latent_vectors(args.batch, 32)
-            latents = Variable(torch.FloatTensor(latents).cuda())
+        args.epochs = 2 # 30
+        epoch = 0
 
-            fake_images = gs[0].forward(latents)
-            Dz = ds[0].forward(fake_images)
+        step_d_layer = 0
+        step_g_layer = 0
 
-            images = downs.forward(Variable(images.cuda()).float())
-            Dx = ds[0].forward(images)
-            # print(fake_images.size(), images.size())
+        tot_d_loss = 0.0
+        tot_g_loss = 0.0
 
-            ### Wasserstein Distance *** look this up ***
-            # https://medium.com/@jonathan_hui/gan-wasserstein-gan-wgan-gp-6a1a2aa1b490
-            wd = Dz - Dx
+        for epoch in range(epoch, args.epochs):
 
-            mix = np.tile(np.random.rand(args.batch, 1, 1, 1), (1, images.size(1), images.size(2), images.size(3)))
-            mix = torch.FloatTensor(mix)
-            x_hat = torch.mul(fake_images.data.cpu(), mix) + torch.mul(images.data.cpu(), 1 - mix)
-            x_hat = Variable(x_hat.cuda(), requires_grad=True)
-            Dx_hat = ds[0].forward(x_hat)
-            # print(Dx_hat)
-            grads = torch.autograd.grad(Dx_hat, x_hat, grad_outputs=torch.ones(Dx_hat.size()).cuda(),
-                                        create_graph=True, retain_graph=True)[0]
-            gp = torch.pow(grads, 2)
-            for i in range(3):
-                gp = torch.sum(gp, dim=1)
-            gp = torch.sqrt(gp)
-            ### hyperparameters
-            w_gamma = 1.0
-            epsilon = 0.001
+            # training the model
+            gs[layer].eval()
+            ds[layer].train()
 
-            gp = torch.pow((gp - w_gamma) / w_gamma, 2)
-            gp_scaled = gp * w_gamma
+            downs = Downsampler(128, 4 * (2 ** layer)).cuda()
 
-            epsilon_cost = epsilon * torch.pow(Dx, 2)
+            tqdm_d = tqdm(loaders['train'], desc = 'epoch %d (D) layer %d' % (epoch + 1, layer + 1))
+
+            if tot_g_loss <= 0.0:
+                tot_d_loss = 0.0
+                for images in tqdm_d:
+                    # convert images and labels into cuda tensor
+                    latents = random_latent_vectors(args.batch, 32)
+                    latents = Variable(torch.FloatTensor(latents).cuda())
+
+                    fake_images = gs[layer].forward(latents)
+                    Dz = ds[layer].forward(fake_images)
+
+                    images = downs.forward(Variable(images.cuda()).float())
+                    Dx = ds[layer].forward(images)
+                    # print(fake_images.size(), images.size())
+
+                    ### Wasserstein Distance *** look this up ***
+                    # https://medium.com/@jonathan_hui/gan-wasserstein-gan-wgan-gp-6a1a2aa1b490
+                    wd = Dz - Dx
+
+                    mix = np.tile(np.random.rand(args.batch, 1, 1, 1), (1, images.size(1), images.size(2), images.size(3)))
+                    mix = torch.FloatTensor(mix)
+                    x_hat = torch.mul(fake_images.data.cpu(), mix) + torch.mul(images.data.cpu(), 1 - mix)
+                    x_hat = Variable(x_hat.cuda(), requires_grad=True)
+                    Dx_hat = ds[layer].forward(x_hat)
+                    # print(Dx_hat)
+                    grads = torch.autograd.grad(Dx_hat, x_hat, grad_outputs=torch.ones(Dx_hat.size()).cuda(),
+                                                create_graph=True, retain_graph=True)[0]
+                    gp = torch.pow(grads, 2)
+                    for i in range(3):
+                        gp = torch.sum(gp, dim=1)
+                    gp = torch.sqrt(gp)
+                    ### hyperparameters
+                    w_gamma = 1.0
+                    epsilon = 0.001
+
+                    gp = torch.pow((gp - w_gamma) / w_gamma, 2)
+                    gp_scaled = gp * w_gamma
+
+                    epsilon_cost = epsilon * torch.pow(Dx, 2)
 
 
-            # loss = gp_scaled
-            # print(grads[0].cpu().data.numpy())
-            # print(grads.size())
-            loss = torch.mean(wd + gp_scaled + epsilon_cost)
+                    # loss = gp_scaled
+                    # print(grads[0].cpu().data.numpy())
+                    # print(grads.size())
+                    loss = torch.mean(wd + gp_scaled + epsilon_cost)
 
-            # images = Variable(images.cuda()).float()
-            # labels = Variable(labels.cuda())
-            # initialize optimizer
-            # optimizer.zero_grad()
+                    # images = Variable(images.cuda()).float()
+                    # labels = Variable(labels.cuda())
+                    # initialize optimizer
+                    # optimizer.zero_grad()
 
-            # forward pass
-            # outputs = model.forward(images)
-            # loss = loss_fn(outputs, labels.squeeze())
-            # add summary to logger
-            logger.scalar_summary('loss (D)', loss.data[0], step_d)
-            wd_log = torch.mean(wd)
-            logger.scalar_summary('Wasserstein Distance', wd_log.data[0], step_d)
-            gp_log = torch.mean(gp_scaled)
-            logger.scalar_summary('Gradient Penalty (scaled)', gp_log.data[0], step_d)
-            epsilon_log = torch.mean(epsilon_cost)
-            logger.scalar_summary('Epsilon Cost', epsilon_log.data[0], step_d)
+                    # forward pass
+                    # outputs = model.forward(images)
+                    # loss = loss_fn(outputs, labels.squeeze())
+                    # add summary to logger
+                    logger.scalar_summary('log loss (D)', logify(loss.data[0]), step_d)
+                    wd_log = torch.mean(wd)
+                    logger.scalar_summary('log Wasserstein Distance', logify(wd_log.data[0]), step_d)
+                    gp_log = torch.mean(gp_scaled)
+                    logger.scalar_summary('log Gradient Penalty (scaled)', logify(gp_log.data[0]), step_d)
+                    epsilon_log = torch.mean(epsilon_cost)
+                    logger.scalar_summary('log Epsilon Cost', logify(epsilon_log.data[0]), step_d)
 
-            step_d += args.batch
-            # backward pass
-            loss.backward()
+                    step_d += args.batch
+                    tot_d_loss += wd_log.data[0]
+                    # backward pass
+                    loss.backward()
 
-            # Clip gradient norms
-            # clip_grad_norm(model.parameters(), 10.0)
 
-            optimizer_d.step()
-            optimizer_d.zero_grad()
+                    # Clip gradient norms
+                    # clip_grad_norm(model.parameters(), 10.0)
 
-        gs[0].train()
-        ds[0].eval()
+                    optimizer_d.step()
+                    optimizer_d.zero_grad()
 
-        for images in tqdm(loaders['train'], desc = 'epoch (G) %d' % (epoch + 1)):
-            latents = random_latent_vectors(args.batch, 32)
-            latents = Variable(torch.FloatTensor(latents).cuda())
+                    step_d_layer += args.batch
+                    ds[layer].alpha = min(1, step_d_layer / (2 * len(data['train'])))
 
-            fake_images = gs[0].forward(latents)
-            Dz = ds[0].forward(fake_images)
+            del tqdm_d
 
-            loss = torch.mean(-Dz)
+            gs[layer].train()
+            ds[layer].eval()
 
-            logger.scalar_summary('loss (G)', loss.data[0], step_g)
+            tqdm_g = tqdm(loaders['train'], desc = 'epoch %d (G) layer %d' % (epoch + 1, layer + 1))
 
-            step_g += args.batch
+            if tot_d_loss <= 0.0:
+                tot_g_loss = 0.0
+                for images in tqdm_g:
+                    latents = random_latent_vectors(args.batch, 32)
+                    latents = Variable(torch.FloatTensor(latents).cuda())
 
-            loss.backward()
+                    fake_images = gs[layer].forward(latents)
+                    Dz = ds[layer].forward(fake_images)
 
-            optimizer_g.step()
-            optimizer_g.zero_grad()
-##### LOGGING STUFF #####
-        # if args.snapshot != 0 and (epoch + 1) % args.snapshot == 0:
-        #     # testing the model
-        #     model.eval()
-        #     top1 = AverageMeter()
-        #     top5 = AverageMeter()
+                    loss = torch.mean(-Dz)
 
-        #     for images, labels in tqdm(loaders['val'], desc = 'epoch %d' % (epoch + 1)):
-        #         outputs = model.forward(Variable(images.cuda())).cpu()
+                    logger.scalar_summary('loss (G)', logify(loss.data[0]), step_g)
 
-        #         prec1, prec5 = accuracy(outputs.data, labels, topk=(1, 5))
-        #         top1.update(prec1[0], images.size(0))
-        #         top5.update(prec5[0], images.size(0))
+                    step_g += args.batch
+                    tot_g_loss += loss.data[0]
 
-        #     if top5.avg > best_top_5:
-        #         best_top_5 = top5.avg
+                    loss.backward()
 
-        #         # snapshot model and optimizer
-        #         snapshot = {
-        #             'epoch': epoch + 1,
-        #             'model': model.state_dict(),
-        #             'optimizer': optimizer.state_dict()
-        #         }
-        #         torch.save(snapshot, os.path.join(exp_path, 'best.pth'))
-        #         print('==> saved snapshot to "{0}"'.format(os.path.join(exp_path, 'best.pth')))
+                    optimizer_g.step()
+                    optimizer_g.zero_grad()
 
-        #     print('Val:      * Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f} in validation'.format(top1=top1, top5=top5))
-        #     logger.scalar_summary('Top 1', top1.avg, epoch)
-        #     logger.scalar_summary('Top 5', top5.avg, epoch)
+                    step_g_layer += args.batch
+                    gs[layer].alpha = min(1, step_g_layer / (2 * len(data['train'])))
 
-        #     if args.file_path == 'data.npz':
-        #         top1_test = AverageMeter()
-        #         top5_test = AverageMeter()
+            del tqdm_g
+    ##### LOGGING STUFF #####
+            if layer == len(CHANNELS) - 1 and args.snapshot != 0 and (epoch + 1) % args.snapshot == 0:
+                snapshot = {
+                    'epoch': epoch + 1,
+                    'model_g': gs[-1].state_dict(),
+                    'model_d': ds[-1].state_dict(),
+                    'optimizer_g': optimizer_g.state_dict(),
+                    'optimizer_d': optimizer_d.state_dict()
+                }
+                torch.save(snapshot, os.path.join(exp_path, 'epoch_%d.pth' % (epoch + 1)))
+                print('==> saved snapshot to "{0}"'.format(os.path.join(exp_path, 'epoch_%d.pth' % (epoch + 1))))
+            #     # testing the model
+            #     model.eval()
+            #     top1 = AverageMeter()
+            #     top5 = AverageMeter()
 
-        #         for images, labels in tqdm(loaders['test'], desc = 'epoch %d' % (epoch + 1)):
-        #             outputs = model.forward(Variable(images.cuda())).cpu()
+            #     for images, labels in tqdm(loaders['val'], desc = 'epoch %d' % (epoch + 1)):
+            #         outputs = model.forward(Variable(images.cuda())).cpu()
 
-        #             prec1, prec5 = accuracy(outputs.data, labels, topk=(1, 5))
-        #             top1_test.update(prec1[0], images.size(0))
-        #             top5_test.update(prec5[0], images.size(0))
+            #         prec1, prec5 = accuracy(outputs.data, labels, topk=(1, 5))
+            #         top1.update(prec1[0], images.size(0))
+            #         top5.update(prec5[0], images.size(0))
 
-        #         # if top5.avg > best_top_5:
-        #         #     best_top_5 = top5.avg
+            #     if top5.avg > best_top_5:
+            #         best_top_5 = top5.avg
 
-        #         #     # snapshot model and optimizer
-        #         #     snapshot = {
-        #         #         'epoch': epoch + 1,
-        #         #         'model': model.state_dict(),
-        #         #         'optimizer': optimizer.state_dict()
-        #         #     }
-        #         #     torch.save(snapshot, os.path.join(exp_path, 'best.pth'))
-        #         #     print('==> saved snapshot to "{0}"'.format(os.path.join(exp_path, 'best.pth')))
+            #         # snapshot model and optimizer
+            #         print('==> saved snapshot to "{0}"'.format(os.path.join(exp_path, 'best.pth')))
 
-        #         print('Test: * Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f} in validation'.format(top1=top1_test, top5=top5_test))
-        #         logger.scalar_summary('Top 1 Test', top1_test.avg, epoch)
-        #         logger.scalar_summary('Top 5 Test', top5_test.avg, epoch)
+                    # torch.save(snapshot, os.path.join(exp_path, 'best.pth'))
+            #     print('Val:      * Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f} in validation'.format(top1=top1, top5=top5))
+            #     logger.scalar_summary('Top 1', top1.avg, epoch)
+            #     logger.scalar_summary('Top 5', top5.avg, epoch)
+
+            #     if args.file_path == 'data.npz':
+            #         top1_test = AverageMeter()
+            #         top5_test = AverageMeter()
+
+            #         for images, labels in tqdm(loaders['test'], desc = 'epoch %d' % (epoch + 1)):
+            #             outputs = model.forward(Variable(images.cuda())).cpu()
+
+            #             prec1, prec5 = accuracy(outputs.data, labels, topk=(1, 5))
+            #             top1_test.update(prec1[0], images.size(0))
+            #             top5_test.update(prec5[0], images.size(0))
+
+            #         # if top5.avg > best_top_5:
+            #         #     best_top_5 = top5.avg
+
+            #         #     # snapshot model and optimizer
+            #         #     snapshot = {
+            #         #         'epoch': epoch + 1,
+            #         #         'model': model.state_dict(),
+            #         #         'optimizer': optimizer.state_dict()
+            #         #     }
+            #         #     torch.save(snapshot, os.path.join(exp_path, 'best.pth'))
+            #         #     print('==> saved snapshot to "{0}"'.format(os.path.join(exp_path, 'best.pth')))
+
+            #         print('Test: * Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f} in validation'.format(top1=top1_test, top5=top5_test))
+            #         logger.scalar_summary('Top 1 Test', top1_test.avg, epoch)
+            #         logger.scalar_summary('Top 5 Test', top5_test.avg, epoch)

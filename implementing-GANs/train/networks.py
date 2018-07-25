@@ -19,7 +19,7 @@ class Generator(nn.Module):
                 self.layers.append([nn.ConvTranspose2d(self.latent_dim, self.channels[i], 4), nn.LeakyReLU()])
             else:
                 # self.features.append(self.upscale(self.channels[i-1])
-                # self.features.append(F.upsample())
+                # self.layers.append([F.upsample(scale_factor=2)])
                 self.layers.append([nn.Conv2d(self.channels[i-1], self.channels[i], 3, padding=1), nn.LeakyReLU()])
 
         self.last_layer = [nn.Conv2d(self.channels[-1], self.channels[-1], 3, padding=1), nn.LeakyReLU()]
@@ -69,6 +69,12 @@ class Generator(nn.Module):
         return torch.add(torch.mul(x0, 1 - self.alpha), torch.mul(x1, self.alpha))
 
 
+    def load_prev_model(self, old_g):
+        for i in range(len(old_g.layers)):
+            for j in range(len(self.layers[i])):
+                self.layers[i][j].load_state_dict(old_g.layers[i][j].state_dict())
+        self.RGB_layer_2.load_state_dict(old_g.RGB_layer_1.state_dict())
+
 class Discriminator(nn.Module):
 
     def __init__(self, num_layers, channels):
@@ -114,18 +120,25 @@ class Discriminator(nn.Module):
         for module in self.RGB_layer_1:
             x1 = module(x1)
         x0 = x
-        for i in reversed(range(self.num_layers)):
+        for i in range(self.num_layers):
             for module in self.layers[i]:
                 x1 = module(x1)
-        if self.RGB_layer_2:
-            for module in self.RGB_layer_2:
-                x0 = module(x0)
-            x1 = self.smooth(x0, x1)
+            if i == 0 and self.RGB_layer_2:
+                for module in self.RGB_layer_2:
+                    x0 = module(x0)
+                x1 = self.smooth(x0, x1)
         return x1
 
 
     def smooth(self, x0, x1):
         return torch.add(torch.mul(x0, 1 - self.alpha), torch.mul(x1, self.alpha))
+
+
+    def load_prev_model(self, old_g):
+        for i in range(len(old_g.layers)):
+            for j in range(len(self.layers[-i-1])):
+                self.layers[-i-1][j].load_state_dict(old_g.layers[-i-1][j].state_dict())
+        self.RGB_layer_2[1].load_state_dict(old_g.RGB_layer_1[0].state_dict())
 
 
 class Downsampler(nn.Module):
