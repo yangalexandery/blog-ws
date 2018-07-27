@@ -146,44 +146,51 @@ if __name__ == '__main__':
     logger = utils.Logger(exp_path)
     print('==> save logs to {0}'.format(exp_path))
 
-    # load snapshot of model and optimizer
-    if args.resume is not None:
-        if os.path.isfile(args.resume):
-            snapshot = torch.load(args.resume)
-            epoch = snapshot['epoch']
-            model.load_state_dict(snapshot['model'])
-            # If this doesn't work, can use optimizer.load_state_dict
-            optimizer.load_state_dict(snapshot['optimizer'])
-            print('==> snapshot "{0}" loaded (epoch {1})'.format(args.resume, epoch))
-        else:
-            raise FileNotFoundError('no snapshot found at "{0}"'.format(args.resume))
-    else:
-        epoch = 0
 
     best_top_5 = 0
 
-    step_d = 0 #epoch * len(data['train'])
-    step_g = 0 #epoch * len(data['train'])
+    step = 0 #epoch * len(data['train'])
     for layer in range(len(CHANNELS)):
-
         optimizer_g = torch.optim.Adam(gs[layer].params, lr=1e-4, weight_decay=1e-5)
         optimizer_d = torch.optim.Adam(ds[layer].params, lr=1e-4, weight_decay=1e-5)
-        print('==> optimizer loaded')
-
-        if layer != 0:
-            ds[layer].load_prev_model(ds[layer - 1])
-            gs[layer].load_prev_model(gs[layer - 1])
-
-        args.epochs = 2 # 30
-        epoch = 0
 
         step_d_layer = 0
         step_g_layer = 0
 
+        if args.resume is not None:
+            if os.path.isfile(args.resume):
+                layer = len(CHANNELS) - 1
+                snapshot = torch.load(args.resume)
+                epoch = snapshot['epoch']
+                ds[layer].load_state_dict(snapshot['model_d'])
+                gs[layer].load_state_dict(snapshot['model_g'])
+                optimizer_d = torch.optim.Adam(ds[layer].params, lr=1e-4, weight_decay=1e-5)
+                optimizer_g = torch.optim.Adam(gs[layer].params, lr=1e-4, weight_decay=1e-5)
+                optimizer_d.load_state_dict(snapshot['optimizer_d'])
+                optimizer_g.load_state_dict(snapshot['optimizer_g'])
+                step = snapshot['step'] if 'step' in snapshot.keys() else 0
+                step_d_layer = 2 * len(data['train'])
+                step_g_layer = 2 * len(data['train'])
+                ds[layer].alpha = 1
+                gs[layer].alpha = 1
+                print('==> snapshot "{0}" loaded (epoch {1})'.format(args.resume, epoch))
+            else:
+                raise FileNotFoundError('no snapshot found at "{0}"'.format(args.resume))
+        else:
+            if layer != 0:
+                ds[layer].load_prev_model(ds[layer - 1])
+                gs[layer].load_prev_model(gs[layer - 1])
+            epoch = 0
+        print('==> optimizer loaded')
+
+        args.epochs = 30
+
+
         tot_d_loss = 0.0
         tot_g_loss = 0.0
+        layer_epochs = [10, 20, 30, 30, 50, 100]
 
-        for epoch in range(epoch, args.epochs):
+        for epoch in range(epoch, layer_epochs[layer]):
 
             # training the model
             gs[layer].eval()
@@ -247,15 +254,15 @@ if __name__ == '__main__':
                     # outputs = model.forward(images)
                     # loss = loss_fn(outputs, labels.squeeze())
                     # add summary to logger
-                    logger.scalar_summary('log loss (D)', logify(loss.data[0]), step_d)
+                    logger.scalar_summary('loss (D)', (loss.data[0]), step)
                     wd_log = torch.mean(wd)
-                    logger.scalar_summary('log Wasserstein Distance', logify(wd_log.data[0]), step_d)
+                    logger.scalar_summary('Wasserstein Distance', (wd_log.data[0]), step)
                     gp_log = torch.mean(gp_scaled)
-                    logger.scalar_summary('log Gradient Penalty (scaled)', logify(gp_log.data[0]), step_d)
+                    logger.scalar_summary('Gradient Penalty (scaled)', (gp_log.data[0]), step)
                     epsilon_log = torch.mean(epsilon_cost)
-                    logger.scalar_summary('log Epsilon Cost', logify(epsilon_log.data[0]), step_d)
+                    logger.scalar_summary('Epsilon Cost', (epsilon_log.data[0]), step)
 
-                    step_d += args.batch
+                    step += args.batch
                     tot_d_loss += wd_log.data[0]
                     # backward pass
                     loss.backward()
@@ -288,9 +295,9 @@ if __name__ == '__main__':
 
                     loss = torch.mean(-Dz)
 
-                    logger.scalar_summary('loss (G)', logify(loss.data[0]), step_g)
+                    logger.scalar_summary('loss (G)', (loss.data[0]), step)
 
-                    step_g += args.batch
+                    step += args.batch
                     tot_g_loss += loss.data[0]
 
                     loss.backward()
@@ -309,7 +316,8 @@ if __name__ == '__main__':
                     'model_g': gs[-1].state_dict(),
                     'model_d': ds[-1].state_dict(),
                     'optimizer_g': optimizer_g.state_dict(),
-                    'optimizer_d': optimizer_d.state_dict()
+                    'optimizer_d': optimizer_d.state_dict(),
+                    'step': step
                 }
                 torch.save(snapshot, os.path.join(exp_path, 'epoch_%d.pth' % (epoch + 1)))
                 print('==> saved snapshot to "{0}"'.format(os.path.join(exp_path, 'epoch_%d.pth' % (epoch + 1))))
