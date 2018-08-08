@@ -37,9 +37,9 @@ class Logger:
 
         for i, image in enumerate(images):
             name = '%s-%d-%d.png' % (tag, step, i)
-            print(image.shape)
+            # print(image.shape)
             image = scipy.misc.toimage(image)
-            print(os.path.join(web_path, path, name))
+            # print(os.path.join(web_path, path, name))
             scipy.misc.imsave(os.path.join(web_path, path, name), image)
 
             if tag not in self.images[step]:

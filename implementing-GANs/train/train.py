@@ -16,6 +16,7 @@ from networks import Generator, Discriminator, Downsampler
 from data import ImageLoader
 
 import time
+import random
 
 def reconstruct_image(im):
     im = im.numpy()
@@ -76,9 +77,10 @@ def logify(val):
     return np.log(val) if val > 0 else -np.log(-val)
 
 CHANNELS = [16, 16, 32, 64, 128, 256]
+LATENT_DIM = 48
 
 NAME_TO_MODEL = {
-    'gen': Generator(len(CHANNELS), 32, CHANNELS),
+    'gen': Generator(len(CHANNELS), LATENT_DIM, CHANNELS),
     'disc': Discriminator(len(CHANNELS), CHANNELS)
 }
 
@@ -102,7 +104,7 @@ if __name__ == '__main__':
     # training
     parser.add_argument('--epochs', default = 500, type = int)
     parser.add_argument('--batch', default = 16, type = int)
-    parser.add_argument('--snapshot', default = 2, type = int)
+    parser.add_argument('--snapshot', default = 10, type = int)
     parser.add_argument('--workers', default = 8, type = int)
     parser.add_argument('--gpu', default = '0')
     parser.add_argument('--name', default = 'fc512')
@@ -131,7 +133,7 @@ if __name__ == '__main__':
     print('[size] = {0}'.format(len(data['train'])))
 
     # set up model and convert into cuda
-    gs = [Generator(i+1, 32, CHANNELS[:i+1]).cuda() for i in range(6)]
+    gs = [Generator(i+1, LATENT_DIM, CHANNELS[:i+1]).cuda() for i in range(6)]
     ds = [Discriminator(i+1, CHANNELS[:i+1]).cuda() for i in range(6)]
 
     # g = NAME_TO_MODEL['gen'].cuda()
@@ -153,6 +155,8 @@ if __name__ == '__main__':
     for layer in range(len(CHANNELS)):
         optimizer_g = torch.optim.Adam(gs[layer].params, lr=1e-4, weight_decay=1e-5)
         optimizer_d = torch.optim.Adam(ds[layer].params, lr=1e-4, weight_decay=1e-5)
+        # optimizer_g = torch.optim.SGD(gs[layer].params, lr=1e-4, weight_decay=1e-5)
+        # optimizer_d = torch.optim.SGD(ds[layer].params, lr=1e-4, weight_decay=1e-5)
 
         step_d_layer = 0
         step_g_layer = 0
@@ -166,6 +170,8 @@ if __name__ == '__main__':
                 gs[layer].load_state_dict(snapshot['model_g'])
                 optimizer_d = torch.optim.Adam(ds[layer].params, lr=1e-4, weight_decay=1e-5)
                 optimizer_g = torch.optim.Adam(gs[layer].params, lr=1e-4, weight_decay=1e-5)
+                # optimizer_g = torch.optim.SGD(gs[layer].params, lr=1e-4, weight_decay=1e-5)
+                # optimizer_d = torch.optim.SGD(ds[layer].params, lr=1e-4, weight_decay=1e-5)
                 optimizer_d.load_state_dict(snapshot['optimizer_d'])
                 optimizer_g.load_state_dict(snapshot['optimizer_g'])
                 step = snapshot['step'] if 'step' in snapshot.keys() else 0
@@ -188,7 +194,8 @@ if __name__ == '__main__':
 
         tot_d_loss = 0.0
         tot_g_loss = 0.0
-        layer_epochs = [10, 20, 30, 30, 50, 100]
+        # layer_epochs = [5, 1000]
+        layer_epochs = [60, 120, 180, 180, 300, 600]
 
         for epoch in range(epoch, layer_epochs[layer]):
 
@@ -200,11 +207,11 @@ if __name__ == '__main__':
 
             tqdm_d = tqdm(loaders['train'], desc = 'epoch %d (D) layer %d' % (epoch + 1, layer + 1))
 
-            if tot_g_loss <= 0.0:
+            if True or tot_g_loss <= 0.0:
                 tot_d_loss = 0.0
                 for images in tqdm_d:
                     # convert images and labels into cuda tensor
-                    latents = random_latent_vectors(args.batch, 32)
+                    latents = random_latent_vectors(args.batch, LATENT_DIM)
                     latents = Variable(torch.FloatTensor(latents).cuda())
 
                     fake_images = gs[layer].forward(latents)
@@ -218,6 +225,7 @@ if __name__ == '__main__':
                     # https://medium.com/@jonathan_hui/gan-wasserstein-gan-wgan-gp-6a1a2aa1b490
                     wd = Dz - Dx
 
+                    # uncomment this for gradient penalty
                     mix = np.tile(np.random.rand(args.batch, 1, 1, 1), (1, images.size(1), images.size(2), images.size(3)))
                     mix = torch.FloatTensor(mix)
                     x_hat = torch.mul(fake_images.data.cpu(), mix) + torch.mul(images.data.cpu(), 1 - mix)
@@ -235,7 +243,7 @@ if __name__ == '__main__':
                     epsilon = 0.001
 
                     gp = torch.pow((gp - w_gamma) / w_gamma, 2)
-                    gp_scaled = gp * w_gamma
+                    gp_scaled = gp * w_gamma * 0.001
 
                     epsilon_cost = epsilon * torch.pow(Dx, 2)
 
@@ -263,7 +271,7 @@ if __name__ == '__main__':
                     logger.scalar_summary('Epsilon Cost', (epsilon_log.data[0]), step)
 
                     step += args.batch
-                    tot_d_loss += wd_log.data[0]
+                    # tot_d_loss += wd_log.data[0]
                     # backward pass
                     loss.backward()
 
@@ -275,7 +283,7 @@ if __name__ == '__main__':
                     optimizer_d.zero_grad()
 
                     step_d_layer += args.batch
-                    ds[layer].alpha = min(1, step_d_layer / (2 * len(data['train'])))
+                    ds[layer].alpha = min(1, step_d_layer / (10 * len(data['train'])))
 
             del tqdm_d
 
@@ -284,10 +292,10 @@ if __name__ == '__main__':
 
             tqdm_g = tqdm(loaders['train'], desc = 'epoch %d (G) layer %d' % (epoch + 1, layer + 1))
 
-            if tot_d_loss <= 0.0:
+            if True or tot_d_loss <= 0.0:
                 tot_g_loss = 0.0
                 for images in tqdm_g:
-                    latents = random_latent_vectors(args.batch, 32)
+                    latents = random_latent_vectors(args.batch, LATENT_DIM)
                     latents = Variable(torch.FloatTensor(latents).cuda())
 
                     fake_images = gs[layer].forward(latents)
@@ -306,10 +314,11 @@ if __name__ == '__main__':
                     optimizer_g.zero_grad()
 
                     step_g_layer += args.batch
-                    gs[layer].alpha = min(1, step_g_layer / (2 * len(data['train'])))
+                    gs[layer].alpha = min(1, step_g_layer / (10 * len(data['train'])))
 
             del tqdm_g
     ##### LOGGING STUFF #####
+            gs[layer].eval()
             if layer == len(CHANNELS) - 1 and args.snapshot != 0 and (epoch + 1) % args.snapshot == 0:
                 snapshot = {
                     'epoch': epoch + 1,
@@ -321,7 +330,25 @@ if __name__ == '__main__':
                 }
                 torch.save(snapshot, os.path.join(exp_path, 'epoch_%d.pth' % (epoch + 1)))
                 print('==> saved snapshot to "{0}"'.format(os.path.join(exp_path, 'epoch_%d.pth' % (epoch + 1))))
-            #     # testing the model
+
+            if args.snapshot != 0 and (epoch + 1) % args.snapshot == 0:
+                num_imgs = 8
+                latents = random_latent_vectors(num_imgs, LATENT_DIM)
+                latents = Variable(torch.FloatTensor(latents).cuda())
+
+                fake_images = gs[layer].forward(latents)
+
+                img_data = fake_images.cpu().data.numpy()
+                img_data = np.transpose(img_data, (0, 2, 3, 1))
+                logger.image_summary('preview images', img_data, step)
+
+                img_index = random.randint(0, 9000)
+                images = data['train'].images[img_index:img_index + 8]
+                images = torch.FloatTensor(np.transpose(images, (0, 3, 1, 2)))
+                # print(images.size())
+                images = downs.forward(Variable(images.cuda()).float())
+                img_data = images.cpu().data.numpy()
+                logger.image_summary('actual_images', img_data, step)
             #     model.eval()
             #     top1 = AverageMeter()
             #     top5 = AverageMeter()

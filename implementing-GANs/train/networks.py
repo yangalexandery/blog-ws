@@ -25,7 +25,8 @@ class Generator(nn.Module):
         self.last_layer = [nn.Conv2d(self.channels[-1], self.channels[-1], 3, padding=1), nn.LeakyReLU()]
 
         self.RGB_layer_1 = nn.Conv2d(self.channels[-1], 3, 1)
-        self.RGB_layer_2 = nn.Conv2d(self.channels[-2], 3, 1) if self.num_layers > 1 else None
+        self.RGB_layer_2 = [nn.Conv2d(self.channels[-2], self.channels[-2], 3, padding=1), nn.LeakyReLU(),
+                            nn.Conv2d(self.channels[-2], 3, 1)] if self.num_layers > 1 else None
 
         self.alpha = 0
         self.find_params()
@@ -42,8 +43,9 @@ class Generator(nn.Module):
         for param in self.RGB_layer_1.parameters():
             self.params.append(param)
         if self.RGB_layer_2:
-            for param in self.RGB_layer_2.parameters():
-                self.params.append(param)
+            for module in self.RGB_layer_2:
+                for param in module.parameters():
+                    self.params.append(param)
 
 
     def forward(self, x):
@@ -60,7 +62,8 @@ class Generator(nn.Module):
                     x = module(x)
         x = self.RGB_layer_1(x)
         if self.num_layers > 1:
-            x0 = self.RGB_layer_2(x0)
+            for module in self.RGB_layer_2:
+                x0 = module(x0)
             return self.smooth(x0, x)
         return x
 
@@ -73,7 +76,8 @@ class Generator(nn.Module):
         for i in range(len(old_g.layers)):
             for j in range(len(self.layers[i])):
                 self.layers[i][j].load_state_dict(old_g.layers[i][j].state_dict())
-        self.RGB_layer_2.load_state_dict(old_g.RGB_layer_1.state_dict())
+        self.RGB_layer_2[0].load_state_dict(old_g.last_layer[0].state_dict())
+        self.RGB_layer_2[2].load_state_dict(old_g.RGB_layer_1.state_dict())
 
 class Discriminator(nn.Module):
 
@@ -95,7 +99,7 @@ class Discriminator(nn.Module):
             else:
                 # need to do minibatch-stddev
                 self.layers.append([nn.Conv2d(self.channels[0], self.channels[0], 3, padding=1), nn.LeakyReLU(),
-                                    nn.Conv2d(self.channels[0], 1, 4), nn.LeakyReLU()])
+                                    nn.Conv2d(self.channels[0], 1, 4)])
         self.alpha = 0
 
         self.get_params()
