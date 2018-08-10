@@ -76,8 +76,8 @@ def logify(val):
         return val
     return np.log(val) if val > 0 else -np.log(-val)
 
-CHANNELS = [16, 16, 32, 64, 128, 256]
-LATENT_DIM = 48
+CHANNELS = [256, 128, 64, 32, 16, 16]
+LATENT_DIM = 100
 
 NAME_TO_MODEL = {
     'gen': Generator(len(CHANNELS), LATENT_DIM, CHANNELS),
@@ -225,7 +225,7 @@ if __name__ == '__main__':
                     # https://medium.com/@jonathan_hui/gan-wasserstein-gan-wgan-gp-6a1a2aa1b490
                     wd = Dz - Dx
 
-                    # uncomment this for gradient penalty
+                    # # uncomment this for gradient penalty
                     mix = np.tile(np.random.rand(args.batch, 1, 1, 1), (1, images.size(1), images.size(2), images.size(3)))
                     mix = torch.FloatTensor(mix)
                     x_hat = torch.mul(fake_images.data.cpu(), mix) + torch.mul(images.data.cpu(), 1 - mix)
@@ -243,11 +243,9 @@ if __name__ == '__main__':
                     epsilon = 0.001
 
                     gp = torch.pow((gp - w_gamma) / w_gamma, 2)
-                    gp_scaled = gp * w_gamma * 0.001
+                    gp_scaled = gp * w_gamma
 
                     epsilon_cost = epsilon * torch.pow(Dx, 2)
-
-
                     # loss = gp_scaled
                     # print(grads[0].cpu().data.numpy())
                     # print(grads.size())
