@@ -42,5 +42,7 @@ def metropolis_hastings(g, h, x0, iters):
 
 if __name__ == '__main__':
 	samples = metropolis_hastings(normal_cond, symmetric_distr, 5, 100000)
-	plt.hist(samples)
+	plt.hist(samples, [5 + 0.05 * i for i in range(25)])
+	plt.xlabel("x")
+	plt.ylabel("frequency")
 	plt.show()
