@@ -26,7 +26,7 @@ n = st.unpack('>I', label_file.read(4))[0]
 total_bytes = n
 labels = np.asarray(st.unpack('>' + 'B'*total_bytes, label_file.read(total_bytes))).reshape((n, 1))
 
-n = 100
+n = 600
 images = images[:n] / 255.0
 labels = labels[:n]
 
@@ -63,7 +63,6 @@ def SNE(data, perplexity=10, eta=0.01, iters=100):
 			p_cond = p_cond / np.sum(p_cond)
 			p[i] = p_cond
 			h = entropy(p_cond)
-			print(h, mid)
 			if math.pow(2, h) < perplexity:
 				low = mid
 			else:
@@ -75,38 +74,31 @@ def SNE(data, perplexity=10, eta=0.01, iters=100):
 	y_tm1 = np.array(ys)
 	y_tm2 = np.array(ys)
 	for it in range(iters):
-		print(it)
+		if i % 10 == 9:
+			print(it + 1)
 		q = np.zeros((n, n))
 		for i in range(n):
 			# calculate q's
 			data_minus_yi = ys - ys[i]
 			norms = np.linalg.norm(data_minus_yi, axis=1)
 			norms = -np.square(norms)
-			# print("0: ", norms, i)
 			norms[i] = -1e9
 			norms -= np.max(norms)
-			# print("1: ", norms)
 			q_cond = np.exp(norms)
 			q_cond[i] = 0.0
 			q_cond = q_cond / np.sum(q_cond)
-			# print("2: ", q_cond)
 			q[i] = q_cond
 
 		gradient = np.zeros((n, 2))
 		# bottleneck of this algorithm
 		for i in range(n):
-			# print("3a: ", p[i:i+1,:])
-			# print("3b: ", p[:,i:i+1].T)
-			# print("3c: ", q[i:i+1,:])
-			# print("3d: ", q[:,i:i+1].T)
-			tmp = p[i:i+1,:] + p[:,i:i+1].T + q[i:i+1,:] + q[:,i:i+1].T
-			ydiff = -(ys - ys[i])
-			# print("3: ", tmp)
+			tmp = p[i:i+1,:] + p[:,i:i+1].T - q[i:i+1,:] - q[:,i:i+1].T
+			ydiff = (ys - ys[i])
 			gradient[i] = 2 * np.dot(tmp, ydiff)
+			# original, unvectorized update rule
 			# for j in range(n):
 			# 	if i != j:
 			# 		gradient[i] += 2 * (ys[i] - ys[j]) * (p[i][j] + p[j][i] - q[i][j] - q[j][i])
-		# print("4: ", gradient)
 		ys_tp1 = ys + eta * gradient + 0.5 * (y_tm1 - y_tm2)
 		y_tm2 = y_tm1
 		y_tm1 = ys
@@ -117,9 +109,10 @@ def SNE(data, perplexity=10, eta=0.01, iters=100):
 
 if __name__ == '__main__':
 	images = images.reshape((n, 28 * 28))
-	ys = SNE(images, perplexity=5, iters=75)
+	ys = SNE(images, perplexity=20, iters=1000)
 	plt.scatter(ys[:,0], ys[:,1])
 	color = ['blue', 'red', 'green', 'yellow', 'orange', 'purple', 'black', 'grey', 'magenta', 'brown']
+	# scatters = []
 	for i in range(10):
 		x = []
 		y = []
@@ -127,7 +120,8 @@ if __name__ == '__main__':
 			if labels[j] == i:
 				x.append(ys[j][0])
 				y.append(ys[j][1])
-		plt.scatter(x, y, color=color[i])
+		plt.scatter(x, y, color=color[i], label=str(i))
 
+	plt.legend()
 	plt.show()
 	# TODO: debug. things shouldn't be growing to infinity
